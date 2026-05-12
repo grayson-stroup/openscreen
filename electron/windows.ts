@@ -247,3 +247,49 @@ export function createCountdownOverlayWindow(): BrowserWindow {
 
 	return win;
 }
+
+export function createAreaSelectorWindow(bounds: Electron.Rectangle): BrowserWindow {
+	const win = new BrowserWindow({
+		x: bounds.x,
+		y: bounds.y,
+		width: bounds.width,
+		height: bounds.height,
+		frame: false,
+		resizable: false,
+		movable: false,
+		alwaysOnTop: true,
+		skipTaskbar: true,
+		transparent: true,
+		hasShadow: false,
+		fullscreenable: false,
+		backgroundColor: "#00000000",
+		webPreferences: {
+			preload: path.join(__dirname, "preload.mjs"),
+			additionalArguments: [ASSET_BASE_URL_ARG],
+			nodeIntegration: false,
+			contextIsolation: true,
+			backgroundThrottling: false,
+		},
+	});
+
+	if (process.platform === "darwin") {
+		win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+	}
+	win.setAlwaysOnTop(true, "screen-saver");
+
+	const query = {
+		windowType: "area-selector",
+		originX: String(bounds.x),
+		originY: String(bounds.y),
+	};
+
+	if (VITE_DEV_SERVER_URL) {
+		const url = new URL(VITE_DEV_SERVER_URL);
+		Object.entries(query).forEach(([key, value]) => url.searchParams.set(key, value));
+		win.loadURL(url.toString());
+	} else {
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), { query });
+	}
+
+	return win;
+}

@@ -32,6 +32,9 @@ interface Window {
 		switchToHud: () => Promise<void>;
 		startNewRecording: () => Promise<{ success: boolean; error?: string }>;
 		openSourceSelector: () => Promise<void>;
+		openAreaSelector: () => Promise<void>;
+		cancelAreaSelection: () => Promise<void>;
+		completeAreaSelection: (rect: SelectionRect) => Promise<ProcessedDesktopSource | null>;
 		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource | null>;
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
 		requestCameraAccess: () => Promise<{
@@ -203,10 +206,21 @@ interface ProcessedDesktopSource {
 	display_id: string;
 	thumbnail: string | null;
 	appIcon: string | null;
+	crop?: SelectionRect & {
+		displayBounds: SelectionRect;
+		displayScaleFactor?: number;
+	};
 }
 
 interface CursorTelemetryPoint {
 	timeMs: number;
 	cx: number;
 	cy: number;
+}
+
+interface SelectionRect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
 }

@@ -39,6 +39,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	openSourceSelector: () => {
 		return ipcRenderer.invoke("open-source-selector");
 	},
+	openAreaSelector: () => {
+		return ipcRenderer.invoke("open-area-selector");
+	},
+	cancelAreaSelection: () => {
+		return ipcRenderer.invoke("cancel-area-selection");
+	},
+	completeAreaSelection: (rect: SelectionRect) => {
+		return ipcRenderer.invoke("complete-area-selection", rect);
+	},
 	selectSource: (source: ProcessedDesktopSource) => {
 		return ipcRenderer.invoke("select-source", source);
 	},

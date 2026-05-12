@@ -80,6 +80,121 @@ type NativeWindowsRecordingHandle = {
 	finalizing: boolean;
 };
 
+type CroppedVideoStreamHandle = {
+	stream: MediaStream;
+	width: number;
+	height: number;
+	cleanup: () => void;
+};
+
+function clamp(value: number, min: number, max: number) {
+	return Math.min(max, Math.max(min, value));
+}
+
+function waitForVideoMetadata(video: HTMLVideoElement) {
+	if (video.videoWidth > 0 && video.videoHeight > 0) {
+		return Promise.resolve();
+	}
+
+	return new Promise<void>((resolve, reject) => {
+		const cleanup = () => {
+			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+			video.removeEventListener("error", handleError);
+		};
+		const handleLoadedMetadata = () => {
+			cleanup();
+			resolve();
+		};
+		const handleError = () => {
+			cleanup();
+			reject(new Error("Could not load screen capture metadata."));
+		};
+
+		video.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
+		video.addEventListener("error", handleError, { once: true });
+	});
+}
+
+async function createCroppedVideoStream(
+	sourceStream: MediaStream,
+	crop: NonNullable<ProcessedDesktopSource["crop"]>,
+): Promise<CroppedVideoStreamHandle> {
+	const sourceTrack = sourceStream.getVideoTracks()[0];
+	if (!sourceTrack) {
+		throw new Error("Video track is not available.");
+	}
+
+	const video = document.createElement("video");
+	video.muted = true;
+	video.playsInline = true;
+	video.srcObject = sourceStream;
+	await waitForVideoMetadata(video);
+	await video.play();
+
+	const settings = sourceTrack.getSettings();
+	const sourceWidth = video.videoWidth || settings.width || DEFAULT_WIDTH;
+	const sourceHeight = video.videoHeight || settings.height || DEFAULT_HEIGHT;
+	const displayLeft = crop.displayBounds.x;
+	const displayTop = crop.displayBounds.y;
+	const displayRight = displayLeft + crop.displayBounds.width;
+	const displayBottom = displayTop + crop.displayBounds.height;
+	const selectionLeft = clamp(crop.x, displayLeft, displayRight);
+	const selectionTop = clamp(crop.y, displayTop, displayBottom);
+	const selectionRight = clamp(crop.x + crop.width, displayLeft, displayRight);
+	const selectionBottom = clamp(crop.y + crop.height, displayTop, displayBottom);
+	const scaleX = sourceWidth / Math.max(1, crop.displayBounds.width);
+	const scaleY = sourceHeight / Math.max(1, crop.displayBounds.height);
+	const cropX = clamp(Math.round((selectionLeft - displayLeft) * scaleX), 0, sourceWidth - 1);
+	const cropY = clamp(Math.round((selectionTop - displayTop) * scaleY), 0, sourceHeight - 1);
+	const cropWidth = clamp(
+		Math.round((selectionRight - selectionLeft) * scaleX),
+		1,
+		sourceWidth - cropX,
+	);
+	const cropHeight = clamp(
+		Math.round((selectionBottom - selectionTop) * scaleY),
+		1,
+		sourceHeight - cropY,
+	);
+	const outputWidth = Math.max(
+		CODEC_ALIGNMENT,
+		Math.floor(cropWidth / CODEC_ALIGNMENT) * CODEC_ALIGNMENT,
+	);
+	const outputHeight = Math.max(
+		CODEC_ALIGNMENT,
+		Math.floor(cropHeight / CODEC_ALIGNMENT) * CODEC_ALIGNMENT,
+	);
+
+	const canvas = document.createElement("canvas");
+	canvas.width = outputWidth;
+	canvas.height = outputHeight;
+	const context = canvas.getContext("2d", { alpha: false });
+	if (!context) {
+		throw new Error("Could not create crop canvas.");
+	}
+
+	let animationFrame = 0;
+	const drawFrame = () => {
+		context.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, outputWidth, outputHeight);
+		animationFrame = requestAnimationFrame(drawFrame);
+	};
+	drawFrame();
+
+	const croppedStream = canvas.captureStream(settings.frameRate ?? TARGET_FRAME_RATE);
+
+	return {
+		stream: croppedStream,
+		width: outputWidth,
+		height: outputHeight,
+		cleanup: () => {
+			cancelAnimationFrame(animationFrame);
+			video.pause();
+			video.srcObject = null;
+			croppedStream.getTracks().forEach((track) => track.stop());
+		},
+	};
+}
+
 function createRecorderHandle(stream: MediaStream, options: MediaRecorderOptions): RecorderHandle {
 	const recorder = new MediaRecorder(stream, options);
 	const chunks: Blob[] = [];
@@ -123,6 +238,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const microphoneStream = useRef<MediaStream | null>(null);
 	const webcamStream = useRef<MediaStream | null>(null);
 	const mixingContext = useRef<AudioContext | null>(null);
+	const croppedVideoCleanup = useRef<(() => void) | null>(null);
 	const recordingId = useRef<number>(0);
 	const accumulatedDurationMs = useRef(0);
 	const segmentStartedAt = useRef<number | null>(null);
@@ -174,6 +290,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	};
 
 	const teardownMedia = useCallback(() => {
+		if (croppedVideoCleanup.current) {
+			croppedVideoCleanup.current();
+			croppedVideoCleanup.current = null;
+		}
 		if (stream.current) {
 			stream.current.getTracks().forEach((track) => track.stop());
 			stream.current = null;
@@ -764,7 +884,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 
-			if (await startNativeWindowsRecordingIfAvailable(selectedSource, countdownRunToken)) {
+			if (
+				!selectedSource.crop &&
+				(await startNativeWindowsRecordingIfAvailable(selectedSource, countdownRunToken))
+			) {
 				return;
 			}
 
@@ -823,6 +946,17 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			}
 			screenStream.current = screenMediaStream;
+			let screenVideoStream = screenMediaStream;
+			let croppedWidth: number | undefined;
+			let croppedHeight: number | undefined;
+
+			if (selectedSource.crop) {
+				const croppedVideo = await createCroppedVideoStream(screenMediaStream, selectedSource.crop);
+				croppedVideoCleanup.current = croppedVideo.cleanup;
+				screenVideoStream = croppedVideo.stream;
+				croppedWidth = croppedVideo.width;
+				croppedHeight = croppedVideo.height;
+			}
 
 			if (!isCountdownRunActive(countdownRunToken)) {
 				teardownMedia();
@@ -885,7 +1019,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			stream.current = new MediaStream();
-			const videoTrack = screenMediaStream.getVideoTracks()[0];
+			const videoTrack = screenVideoStream.getVideoTracks()[0];
 			if (!videoTrack) {
 				throw new Error("Video track is not available.");
 			}
@@ -911,17 +1045,19 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				stream.current.addTrack(micAudioTrack);
 			}
 
-			try {
-				await videoTrack.applyConstraints({
-					frameRate: { ideal: TARGET_FRAME_RATE, max: TARGET_FRAME_RATE },
-					width: { ideal: TARGET_WIDTH, max: TARGET_WIDTH },
-					height: { ideal: TARGET_HEIGHT, max: TARGET_HEIGHT },
-				});
-			} catch (constraintError) {
-				console.warn(
-					"Unable to lock 4K/60fps constraints, using best available track settings.",
-					constraintError,
-				);
+			if (!selectedSource.crop) {
+				try {
+					await videoTrack.applyConstraints({
+						frameRate: { ideal: TARGET_FRAME_RATE, max: TARGET_FRAME_RATE },
+						width: { ideal: TARGET_WIDTH, max: TARGET_WIDTH },
+						height: { ideal: TARGET_HEIGHT, max: TARGET_HEIGHT },
+					});
+				} catch (constraintError) {
+					console.warn(
+						"Unable to lock 4K/60fps constraints, using best available track settings.",
+						constraintError,
+					);
+				}
 			}
 
 			if (!isCountdownRunActive(countdownRunToken)) {
@@ -930,10 +1066,13 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			let {
-				width = DEFAULT_WIDTH,
-				height = DEFAULT_HEIGHT,
+				width = croppedWidth ?? DEFAULT_WIDTH,
+				height = croppedHeight ?? DEFAULT_HEIGHT,
 				frameRate = TARGET_FRAME_RATE,
 			} = videoTrack.getSettings();
+
+			width = croppedWidth ?? width;
+			height = croppedHeight ?? height;
 
 			width = Math.floor(width / CODEC_ALIGNMENT) * CODEC_ALIGNMENT;
 			height = Math.floor(height / CODEC_ALIGNMENT) * CODEC_ALIGNMENT;

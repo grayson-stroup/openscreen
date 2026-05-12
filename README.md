@@ -51,6 +51,30 @@ Screen Studio is an awesome product and this is definitely not a 1:1 clone. Open
 
 Download the latest installer for your platform from the [GitHub Releases](https://github.com/siddharthvaddem/openscreen/releases) page.
 
+## Local Development
+
+OpenScreen uses npm, Vite, React, TypeScript, and Electron. Make sure you are running Node.js 22, 23, or 24 with npm 10 or 11.
+
+From the project root, run:
+
+```bash
+npm start
+```
+
+This installs dependencies with `npm ci` and then starts the Electron app in development mode. If dependencies are already installed, you can skip the install step:
+
+```bash
+npm run dev
+```
+
+Useful development commands:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
 ### macOS
 
 The easiest way to install on macOS is via [Homebrew](https://brew.sh):

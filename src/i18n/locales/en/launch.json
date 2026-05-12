@@ -32,7 +32,13 @@
 		"loading": "Loading sources...",
 		"screens": "Screens ({{count}})",
 		"windows": "Windows ({{count}})",
+		"portion": "Portion",
+		"selectedPortion": "Selected Portion",
+		"selectedPortionDescription": "Click and drag to choose the area to record.",
 		"defaultSourceName": "Screen"
+	},
+	"areaSelector": {
+		"instructions": "Click and drag to select a portion. Press Esc to cancel."
 	},
 	"recording": {
 		"selectSource": "Please select a source to record"

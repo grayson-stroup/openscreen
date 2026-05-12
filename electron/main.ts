@@ -8,6 +8,7 @@ import {
 	ipcMain,
 	Menu,
 	nativeImage,
+	screen,
 	session,
 	systemPreferences,
 	Tray,
@@ -15,6 +16,7 @@ import {
 import { mainT, setMainLocale } from "./i18n";
 import { registerIpcHandlers } from "./ipc/handlers";
 import {
+	createAreaSelectorWindow,
 	createCountdownOverlayWindow,
 	createEditorWindow,
 	createHudOverlayWindow,
@@ -77,6 +79,7 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Window references
 let mainWindow: BrowserWindow | null = null;
 let sourceSelectorWindow: BrowserWindow | null = null;
+let areaSelectorWindow: BrowserWindow | null = null;
 let countdownOverlayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let selectedSourceName = "";
@@ -405,6 +408,34 @@ function createSourceSelectorWindowWrapper() {
 	return sourceSelectorWindow;
 }
 
+function getAllDisplaysBounds() {
+	const displays = screen.getAllDisplays();
+	const left = Math.min(...displays.map((display) => display.bounds.x));
+	const top = Math.min(...displays.map((display) => display.bounds.y));
+	const right = Math.max(...displays.map((display) => display.bounds.x + display.bounds.width));
+	const bottom = Math.max(...displays.map((display) => display.bounds.y + display.bounds.height));
+
+	return {
+		x: left,
+		y: top,
+		width: right - left,
+		height: bottom - top,
+	};
+}
+
+function createAreaSelectorWindowWrapper() {
+	if (areaSelectorWindow && !areaSelectorWindow.isDestroyed()) {
+		areaSelectorWindow.focus();
+		return areaSelectorWindow;
+	}
+
+	areaSelectorWindow = createAreaSelectorWindow(getAllDisplaysBounds());
+	areaSelectorWindow.on("closed", () => {
+		areaSelectorWindow = null;
+	});
+	return areaSelectorWindow;
+}
+
 function createCountdownOverlayWindowWrapper() {
 	if (countdownOverlayWindow && !countdownOverlayWindow.isDestroyed()) {
 		return countdownOverlayWindow;
@@ -525,9 +556,11 @@ app.whenReady().then(async () => {
 	registerIpcHandlers(
 		createEditorWindowWrapper,
 		createSourceSelectorWindowWrapper,
+		createAreaSelectorWindowWrapper,
 		createCountdownOverlayWindowWrapper,
 		() => mainWindow,
 		() => sourceSelectorWindow,
+		() => areaSelectorWindow,
 		() => countdownOverlayWindow,
 		(recording: boolean, sourceName: string) => {
 			selectedSourceName = sourceName;

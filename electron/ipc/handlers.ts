@@ -42,7 +42,8 @@ const PROJECT_FILE_EXTENSION = "openscreen";
 const SHORTCUTS_FILE = path.join(app.getPath("userData"), "shortcuts.json");
 const RECORDING_FILE_PREFIX = "recording-";
 const RECORDING_SESSION_SUFFIX = ".session.json";
-const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([".webm", ".mp4", ".mov", ".avi", ".mkv"]);
+const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([".webm", ".mp4", ".mov", ".avi", ".mkv", ".m4v"]);
+const ALLOWED_EXTERNAL_URL_PROTOCOLS = new Set(["https:", "http:", "mailto:"]);
 
 /**
  * Paths explicitly approved by the user via file picker dialogs or project loads.
@@ -208,10 +209,21 @@ async function getApprovedProjectSession(
 		: { screenVideoPath, createdAt: Date.now() };
 }
 
+type SelectionRect = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
 type SelectedSource = {
 	name: string;
 	id?: string;
 	display_id?: string;
+	crop?: SelectionRect & {
+		displayBounds: Electron.Rectangle;
+		displayScaleFactor: number;
+	};
 	[key: string]: unknown;
 };
 
@@ -253,6 +265,22 @@ function normalizeVideoSourcePath(videoPath?: string | null): string | null {
 	}
 
 	return trimmed;
+}
+
+function clamp(value: number, min: number, max: number) {
+	return Math.min(max, Math.max(min, value));
+}
+
+function sanitizeExternalUrl(rawUrl: string): string | null {
+	if (typeof rawUrl !== "string") {
+		return null;
+	}
+	try {
+		const parsedUrl = new URL(rawUrl);
+		return ALLOWED_EXTERNAL_URL_PROTOCOLS.has(parsedUrl.protocol) ? parsedUrl.toString() : null;
+	} catch {
+		return null;
+	}
 }
 
 function isTrustedProjectPath(filePath?: string | null) {
@@ -425,6 +453,10 @@ function resolveAssetBasePath() {
 }
 
 function getSelectedSourceBounds() {
+	if (selectedSource?.crop) {
+		return selectedSource.crop;
+	}
+
 	const cursor = screen.getCursorScreenPoint();
 	const sourceDisplayId = Number(selectedSource?.display_id);
 	const sourceDisplay = Number.isFinite(sourceDisplayId)
@@ -768,7 +800,7 @@ function waitForNativeWindowsCaptureStop(proc: ChildProcessWithoutNullStreams) {
 
 function readNativeWindowsWebcamFormat(output: string) {
 	const lines = output.split(/\r?\n/).filter((line) => line.includes('"event":"webcam-format"'));
-	const lastLine = lines.at(-1);
+	const lastLine = lines[lines.length - 1];
 	if (!lastLine) {
 		return null;
 	}
@@ -865,9 +897,11 @@ async function loadRecordedSessionForVideoPath(
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
+	createAreaSelectorWindow: () => BrowserWindow,
 	createCountdownOverlayWindow: () => BrowserWindow,
 	getMainWindow: () => BrowserWindow | null,
 	getSourceSelectorWindow: () => BrowserWindow | null,
+	getAreaSelectorWindow: () => BrowserWindow | null,
 	getCountdownOverlayWindow?: () => BrowserWindow | null,
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
 	_switchToHud?: () => void,
@@ -982,6 +1016,94 @@ export function registerIpcHandlers(
 			return;
 		}
 		createSourceSelectorWindow();
+	});
+
+	ipcMain.handle("open-area-selector", () => {
+		const sourceSelectorWin = getSourceSelectorWindow();
+		if (sourceSelectorWin) {
+			sourceSelectorWin.close();
+		}
+
+		const areaSelectorWin = getAreaSelectorWindow();
+		if (areaSelectorWin) {
+			areaSelectorWin.focus();
+			return;
+		}
+
+		createAreaSelectorWindow();
+	});
+
+	ipcMain.handle("cancel-area-selection", () => {
+		const areaSelectorWin = getAreaSelectorWindow();
+		if (areaSelectorWin) {
+			areaSelectorWin.close();
+		}
+	});
+
+	ipcMain.handle("complete-area-selection", async (_, rect: SelectionRect) => {
+		const minSize = 10;
+		if (
+			!rect ||
+			!Number.isFinite(rect.x) ||
+			!Number.isFinite(rect.y) ||
+			!Number.isFinite(rect.width) ||
+			!Number.isFinite(rect.height) ||
+			rect.width < minSize ||
+			rect.height < minSize
+		) {
+			return null;
+		}
+
+		const center = {
+			x: rect.x + rect.width / 2,
+			y: rect.y + rect.height / 2,
+		};
+		const display = screen.getDisplayNearestPoint(center);
+		const bounds = display.bounds;
+		const selectionLeft = clamp(rect.x, bounds.x, bounds.x + bounds.width);
+		const selectionTop = clamp(rect.y, bounds.y, bounds.y + bounds.height);
+		const selectionRight = clamp(rect.x + rect.width, bounds.x, bounds.x + bounds.width);
+		const selectionBottom = clamp(rect.y + rect.height, bounds.y, bounds.y + bounds.height);
+		const selection = {
+			x: selectionLeft,
+			y: selectionTop,
+			width: selectionRight - selectionLeft,
+			height: selectionBottom - selectionTop,
+		};
+		if (selection.width < minSize || selection.height < minSize) {
+			return null;
+		}
+
+		const sources = await desktopCapturer.getSources({
+			types: ["screen"],
+			thumbnailSize: { width: 1, height: 1 },
+		});
+		const source = sources.find((candidate) => candidate.display_id === String(display.id));
+		if (!source) {
+			return null;
+		}
+
+		selectedSource = {
+			id: source.id,
+			name: "Selected Portion",
+			display_id: source.display_id,
+			thumbnail: null,
+			appIcon: null,
+			crop: {
+				...selection,
+				displayBounds: bounds,
+				displayScaleFactor: display.scaleFactor,
+			},
+		};
+		selectedDesktopSource = source;
+		lastEnumeratedSources.set(source.id, source);
+
+		const areaSelectorWin = getAreaSelectorWindow();
+		if (areaSelectorWin) {
+			areaSelectorWin.close();
+		}
+
+		return selectedSource;
 	});
 
 	ipcMain.handle("switch-to-editor", () => {
@@ -1428,7 +1550,11 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("open-external-url", async (_, url: string) => {
 		try {
-			await shell.openExternal(url);
+			const sanitizedUrl = sanitizeExternalUrl(url);
+			if (!sanitizedUrl) {
+				return { success: false, error: "Unsupported URL protocol" };
+			}
+			await shell.openExternal(sanitizedUrl);
 			return { success: true };
 		} catch (error) {
 			console.error("Failed to open URL:", error);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MdCheck } from "react-icons/md";
+import { MdCheck, MdCropFree } from "react-icons/md";
 import { useScopedT } from "@/contexts/I18nContext";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
@@ -12,6 +12,8 @@ interface DesktopSource {
 	display_id: string;
 	appIcon: string | null;
 }
+
+const SELECTED_PORTION_SOURCE_ID = "__selected-portion__";
 
 export function SourceSelector() {
 	const t = useScopedT("launch");
@@ -52,10 +54,22 @@ export function SourceSelector() {
 
 	const screenSources = sources.filter((s) => s.id.startsWith("screen:"));
 	const windowSources = sources.filter((s) => s.id.startsWith("window:"));
+	const selectedPortionSource: DesktopSource = {
+		id: SELECTED_PORTION_SOURCE_ID,
+		name: t("sourceSelector.selectedPortion"),
+		thumbnail: null,
+		display_id: "",
+		appIcon: null,
+	};
 
 	const handleSourceSelect = (source: DesktopSource) => setSelectedSource(source);
 	const handleShare = async () => {
-		if (selectedSource) await window.electronAPI.selectSource(selectedSource);
+		if (!selectedSource) return;
+		if (selectedSource.id === SELECTED_PORTION_SOURCE_ID) {
+			await window.electronAPI.openAreaSelector();
+			return;
+		}
+		await window.electronAPI.selectSource(selectedSource);
 	};
 
 	if (loading) {
@@ -111,7 +125,7 @@ export function SourceSelector() {
 					defaultValue={screenSources.length === 0 ? "windows" : "screens"}
 					className="flex-1 flex flex-col"
 				>
-					<TabsList className="mb-3 grid h-8 grid-cols-2 rounded-xl border border-white/[0.06] bg-white/[0.04] p-0.5">
+					<TabsList className="mb-3 grid h-8 grid-cols-3 rounded-xl border border-white/[0.06] bg-white/[0.04] p-0.5">
 						<TabsTrigger
 							value="screens"
 							className="rounded-lg py-1 text-[11px] text-zinc-400 transition-all data-[state=active]:bg-white/[0.12] data-[state=active]:text-white"
@@ -123,6 +137,12 @@ export function SourceSelector() {
 							className="rounded-lg py-1 text-[11px] text-zinc-400 transition-all data-[state=active]:bg-white/[0.12] data-[state=active]:text-white"
 						>
 							{t("sourceSelector.windows", { count: String(windowSources.length) })}
+						</TabsTrigger>
+						<TabsTrigger
+							value="portion"
+							className="rounded-lg py-1 text-[11px] text-zinc-400 transition-all data-[state=active]:bg-white/[0.12] data-[state=active]:text-white"
+						>
+							{t("sourceSelector.portion")}
 						</TabsTrigger>
 					</TabsList>
 					<div className="flex-1 min-h-0">
@@ -138,6 +158,22 @@ export function SourceSelector() {
 								className={`grid h-[282px] auto-rows-min grid-cols-2 gap-2.5 overflow-y-auto pr-1.5 pt-1 ${styles.sourceGridScroll}`}
 							>
 								{windowSources.map(renderSourceCard)}
+							</div>
+						</TabsContent>
+						<TabsContent value="portion" className="h-full mt-0">
+							<div className="h-[280px] flex items-start justify-center pt-10">
+								<div
+									className={`${styles.sourceCard} ${selectedSource?.id === SELECTED_PORTION_SOURCE_ID ? styles.selected : ""} w-64 p-4 text-center`}
+									onClick={() => handleSourceSelect(selectedPortionSource)}
+								>
+									<div className="mx-auto mb-3 flex h-24 w-full items-center justify-center rounded-lg border border-dashed border-white/20 bg-white/5">
+										<MdCropFree size={36} className="text-[#34B27B]" />
+									</div>
+									<div className={styles.name}>{selectedPortionSource.name}</div>
+									<p className={`${styles.cardText} mt-1`}>
+										{t("sourceSelector.selectedPortionDescription")}
+									</p>
+								</div>
 							</div>
 						</TabsContent>
 					</div>

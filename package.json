@@ -13,6 +13,7 @@
 		"email": "svaddem@asu.edu"
 	},
 	"scripts": {
+		"start": "npm ci && npm run dev",
 		"dev": "vite",
 		"build": "tsc && vite build && electron-builder",
 		"lint": "biome check .",
